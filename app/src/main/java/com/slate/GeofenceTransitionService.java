@@ -18,7 +18,7 @@ import static com.slate.Constants.BROADCAST_TASK_ENTER;
 public class GeofenceTransitionService extends IntentService {
 
     private static final String TAG = GeofenceTransitionService.class.getSimpleName();
-    
+
     public GeofenceTransitionService() {
         super(TAG);
     }

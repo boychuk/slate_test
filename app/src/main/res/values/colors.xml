@@ -4,5 +4,18 @@
     <color name="colorPrimaryDark">#303F9F</color>
     <color name="colorAccent">#FF4081</color>
     <color name="white">#FFFFFF</color>
+    <color name="Background">#408D42</color>
+
+    <color name="Background.CardView">#DDDDDD</color>
+
+    <color name="TextColor.White">#FFFFFF</color>
+    <color name="TextColor.Gray">#999999</color>
+    <color name="TextColor.DarkGray">#333333</color>
+    <color name="TextColor.Black">#000000</color>
+
+    <color name="Divider">#333333</color>
+
+    <color name="Status.ENTER">#408D42</color>
+    <color name="Status.EXIST">#ff0000</color>
 
 </resources>

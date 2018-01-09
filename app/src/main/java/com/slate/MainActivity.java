@@ -2,22 +2,31 @@ package com.slate;
 
 import android.Manifest;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.location.Location;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
+import android.support.design.widget.Snackbar;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.app.DialogFragment;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.TextView;
 
 import com.google.android.gms.common.ConnectionResult;
@@ -40,6 +49,15 @@ import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.slate.model.CustomGeofence;
+
+import static com.slate.Constants.BROADCAST_ACTION;
+import static com.slate.Constants.BROADCAST_TASK_ENTER;
+import static com.slate.Constants.KEY_GEOFENCE_LAT;
+import static com.slate.Constants.KEY_GEOFENCE_LON;
+import static com.slate.Constants.KEY_GEOFENCE_NAME;
+import static com.slate.Constants.KEY_GEOFENCE_RADIUS;
+import static com.slate.Constants.REQ_PERMISSION;
 
 public class MainActivity extends AppCompatActivity implements
         GoogleApiClient.ConnectionCallbacks,
@@ -48,7 +66,7 @@ public class MainActivity extends AppCompatActivity implements
         OnMapReadyCallback,
         GoogleMap.OnMapClickListener,
         GoogleMap.OnMarkerClickListener,
-        ResultCallback<Status> {
+        ResultCallback<Status>, AddGeofenceDialog.AddGeofenceListener {
 
     private static final String TAG = MainActivity.class.getSimpleName();
 
@@ -56,31 +74,85 @@ public class MainActivity extends AppCompatActivity implements
     private GoogleApiClient googleApiClient;
     private Location lastLocation;
 
-    private TextView textLat, textLong;
-
+    private TextView tvLat, tvLon, tvStatus;
     private MapFragment mapFragment;
 
-    private static final String NOTIFICATION_MSG = "NOTIFICATION MSG";
+    private CustomGeofence customGeofence;
 
-    // Create a Intent send by the notification
-    public static Intent makeNotificationIntent(Context context, String msg) {
-        Intent intent = new Intent(context, MainActivity.class);
-        intent.putExtra(NOTIFICATION_MSG, msg);
-        return intent;
-    }
+    private static final long GEO_DURATION = 60 * 60 * 1000;
+    private static final String GEOFENCE_REQ_ID = "My Geofence";
+
+    // Defined in mili seconds.
+    // This number in extremely low, and should be used only for debug
+    private final int UPDATE_INTERVAL = 1000;
+    private final int FASTEST_INTERVAL = 900;
+
+     private BroadcastReceiver brGeofence, brNetwork;
+    private boolean isInsideArea = false;
+    private boolean isConnectWiFi = false;
+
+    // Draw Geofence circle on GoogleMap
+    private Circle geoFenceLimits;
+
+    private LocationRequest locationRequest;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        textLat = (TextView) findViewById(R.id.lat);
-        textLong = (TextView) findViewById(R.id.lon);
+
+        tvLat = findViewById(R.id.tvLat);
+        tvLon = findViewById(R.id.tvLon);
+        tvStatus = findViewById(R.id.tvStatus);
 
         // initialize GoogleMaps
         initGMaps();
 
         // create GoogleApiClient
         createGoogleApi();
+
+
+        findViewById(R.id.fab).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                AddGeofenceDialog dialogFragment = new AddGeofenceDialog();
+                dialogFragment.setListener(MainActivity.this);
+                dialogFragment.setCustomGeofence(customGeofence);
+                dialogFragment.show(getSupportFragmentManager(), "AddGeofenceDialog");
+            }
+        });
+
+        brGeofence = new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                isInsideArea = intent.getBooleanExtra(BROADCAST_TASK_ENTER, false);
+                Log.d(TAG, "onReceive: isInsideArea = " + isInsideArea);
+                checkStatus();
+            }
+        };
+
+        brNetwork = new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                checkNetwork();
+            }
+        };
+    }
+
+    private void checkNetwork() {
+        NetworkInfo info = getNetworkInfo(this);
+        Log.e(TAG, "getNetworkInfo " + info.toString());
+        if (info != null && info.isConnected()) {
+            isConnectWiFi = false;
+            WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            WifiInfo wifiInfo = wifiManager.getConnectionInfo();
+            String ssid = wifiInfo.getSSID().replace("\"", "");
+            if (customGeofence != null)
+                if (ssid.equals(customGeofence.getName())) {
+                    isConnectWiFi = true;
+                }
+        } else {
+            isConnectWiFi = false;
+        }
+        checkStatus();
     }
 
     // Create GoogleApiClient instance
@@ -95,12 +167,39 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+
+    private void checkStatus() {
+        if (isConnectWiFi || isInsideArea) {
+            setEnterStatus();
+        } else if (isConnectWiFi) {
+            setEnterStatus();
+        } else {
+            setExistStatus();
+        }
+    }
+
+    private void setEnterStatus() {
+        tvStatus.setText(getString(R.string.inside_in_area));
+        tvStatus.setBackgroundColor(getResources().getColor(R.color.Status_ENTER));
+    }
+
+    private void setExistStatus() {
+        tvStatus.setText(getString(R.string.not_inside_in_area));
+        tvStatus.setBackgroundColor(getResources().getColor(R.color.Status_EXIST));
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
 
         // Call GoogleApiClient connection when starting the Activity
         googleApiClient.connect();
+
+        IntentFilter intFilt = new IntentFilter(BROADCAST_ACTION);
+        registerReceiver(brGeofence, intFilt);
+
+        registerReceiver(brNetwork, new IntentFilter("android.net.wifi.STATE_CHANGE")); // IntentFilter to wifi state change is "android.net.wifi.STATE_CHANGE"
+        checkNetwork();
     }
 
     @Override
@@ -109,6 +208,12 @@ public class MainActivity extends AppCompatActivity implements
 
         // Disconnect GoogleApiClient when stopping Activity
         googleApiClient.disconnect();
+
+        //unregister entering receiver
+        unregisterReceiver(brGeofence);
+
+        unregisterReceiver(brNetwork);
+
     }
 
     @Override
@@ -121,10 +226,10 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
-            case R.id.geofence: {
+          /*  case R.id.geofence: {
                 startGeofence();
                 return true;
-            }
+            }*/
             case R.id.clear: {
                 clearGeofence();
                 return true;
@@ -133,7 +238,6 @@ public class MainActivity extends AppCompatActivity implements
         return super.onOptionsItemSelected(item);
     }
 
-    private final int REQ_PERMISSION = 999;
 
     // Check for permission to access Location
     private boolean checkPermission() {
@@ -198,7 +302,7 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public void onMapClick(LatLng latLng) {
         Log.d(TAG, "onMapClick(" + latLng + ")");
-        markerForGeofence(latLng);
+//        markerForGeofence(latLng);
     }
 
     @Override
@@ -207,11 +311,6 @@ public class MainActivity extends AppCompatActivity implements
         return false;
     }
 
-    private LocationRequest locationRequest;
-    // Defined in mili seconds.
-    // This number in extremely low, and should be used only for debug
-    private final int UPDATE_INTERVAL = 1000;
-    private final int FASTEST_INTERVAL = 900;
 
     // Start location Updates
     private void startLocationUpdates() {
@@ -238,6 +337,7 @@ public class MainActivity extends AppCompatActivity implements
         Log.i(TAG, "onConnected()");
         getLastKnownLocation();
         recoverGeofenceMarker();
+        checkNetwork();
     }
 
     // GoogleApiClient.ConnectionCallbacks suspended
@@ -271,8 +371,8 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void writeActualLocation(Location location) {
-        textLat.setText("Lat: " + location.getLatitude());
-        textLong.setText("Long: " + location.getLongitude());
+        tvLat.setText("Lat: " + location.getLatitude());
+        tvLon.setText("Long: " + location.getLongitude());
 
         markerLocation(new LatLng(location.getLatitude(), location.getLongitude()));
     }
@@ -295,7 +395,7 @@ public class MainActivity extends AppCompatActivity implements
             locationMarker = map.addMarker(markerOptions);
             float zoom = 14f;
             CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(latLng, zoom);
-            map.animateCamera(cameraUpdate);
+//            map.animateCamera(cameraUpdate);
         }
     }
 
@@ -304,7 +404,7 @@ public class MainActivity extends AppCompatActivity implements
 
     private void markerForGeofence(LatLng latLng) {
         Log.i(TAG, "markerForGeofence(" + latLng + ")");
-        String title = latLng.latitude + ", " + latLng.longitude;
+        String title = customGeofence.getName();//latLng.latitude + ", " + latLng.longitude;
         // Define marker options
         MarkerOptions markerOptions = new MarkerOptions()
                 .position(latLng)
@@ -324,17 +424,17 @@ public class MainActivity extends AppCompatActivity implements
     private void startGeofence() {
         Log.i(TAG, "startGeofence()");
         if (geoFenceMarker != null) {
-            Geofence geofence = createGeofence(geoFenceMarker.getPosition(), GEOFENCE_RADIUS);
+            isConnectWiFi = false;
+            isInsideArea = false;
+            checkStatus();
+
+            Geofence geofence = createGeofence(geoFenceMarker.getPosition(), customGeofence.getRadius() * 1000.0f);
             GeofencingRequest geofenceRequest = createGeofenceRequest(geofence);
             addGeofence(geofenceRequest);
         } else {
             Log.e(TAG, "Geofence marker is null");
         }
     }
-
-    private static final long GEO_DURATION = 60 * 60 * 1000;
-    private static final String GEOFENCE_REQ_ID = "My Geofence";
-    private static final float GEOFENCE_RADIUS = 500.0f; // in meters
 
     // Create a Geofence
     private Geofence createGeofence(LatLng latLng, float radius) {
@@ -352,7 +452,7 @@ public class MainActivity extends AppCompatActivity implements
     private GeofencingRequest createGeofenceRequest(Geofence geofence) {
         Log.d(TAG, "createGeofenceRequest");
         return new GeofencingRequest.Builder()
-                .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+                .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER | GeofencingRequest.INITIAL_TRIGGER_EXIT)
                 .addGeofence(geofence)
                 .build();
     }
@@ -366,19 +466,21 @@ public class MainActivity extends AppCompatActivity implements
             return geoFencePendingIntent;
 
         Intent intent = new Intent(this, GeofenceTransitionService.class);
-        return PendingIntent.getService(
+        geoFencePendingIntent = PendingIntent.getService(
                 this, GEOFENCE_REQ_CODE, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        return geoFencePendingIntent;
     }
 
     // Add the created GeofenceRequest to the device's monitoring list
     private void addGeofence(GeofencingRequest request) {
         Log.d(TAG, "addGeofence");
-        if (checkPermission())
+        if (checkPermission()) {
             LocationServices.GeofencingApi.addGeofences(
                     googleApiClient,
                     request,
                     createGeofencePendingIntent()
             ).setResultCallback(this);
+        }
     }
 
     @Override
@@ -388,12 +490,16 @@ public class MainActivity extends AppCompatActivity implements
             saveGeofence();
             drawGeofence();
         } else {
-            // inform about fail
+            showSnackbar("Error");
         }
     }
 
-    // Draw Geofence circle on GoogleMap
-    private Circle geoFenceLimits;
+    private void showSnackbar(final String text) {
+        View container = findViewById(android.R.id.content);
+        if (container != null) {
+            Snackbar.make(container, text, Snackbar.LENGTH_LONG).show();
+        }
+    }
 
     private void drawGeofence() {
         Log.d(TAG, "drawGeofence()");
@@ -405,23 +511,31 @@ public class MainActivity extends AppCompatActivity implements
                 .center(geoFenceMarker.getPosition())
                 .strokeColor(Color.argb(50, 70, 70, 70))
                 .fillColor(Color.argb(100, 150, 150, 150))
-                .radius(GEOFENCE_RADIUS);
+                .radius(customGeofence.getRadius() * 1000.0f);
         geoFenceLimits = map.addCircle(circleOptions);
     }
-
-    private final String KEY_GEOFENCE_LAT = "GEOFENCE LATITUDE";
-    private final String KEY_GEOFENCE_LON = "GEOFENCE LONGITUDE";
 
     // Saving GeoFence marker with prefs mng
     private void saveGeofence() {
         Log.d(TAG, "saveGeofence()");
         SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
         SharedPreferences.Editor editor = sharedPref.edit();
-
+        editor.putString(KEY_GEOFENCE_NAME, customGeofence.getName());
+        editor.putFloat(KEY_GEOFENCE_RADIUS, customGeofence.getRadius());
         editor.putLong(KEY_GEOFENCE_LAT, Double.doubleToRawLongBits(geoFenceMarker.getPosition().latitude));
         editor.putLong(KEY_GEOFENCE_LON, Double.doubleToRawLongBits(geoFenceMarker.getPosition().longitude));
         editor.apply();
     }
+
+    // Removing GeoFence marker with prefs mng
+    private void removeGeofence() {
+        Log.d(TAG, "removeGeofence()");
+        SharedPreferences sharedPref = getPreferences(Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPref.edit();
+        editor.clear();
+        editor.commit();
+    }
+
 
     // Recovering last Geofence marker
     private void recoverGeofenceMarker() {
@@ -432,14 +546,21 @@ public class MainActivity extends AppCompatActivity implements
             double lat = Double.longBitsToDouble(sharedPref.getLong(KEY_GEOFENCE_LAT, -1));
             double lon = Double.longBitsToDouble(sharedPref.getLong(KEY_GEOFENCE_LON, -1));
             LatLng latLng = new LatLng(lat, lon);
+            customGeofence = new CustomGeofence();
+            customGeofence.setLongitude(lon);
+            customGeofence.setLatitude(lat);
+            customGeofence.setName(sharedPref.getString(KEY_GEOFENCE_NAME, ""));
+            customGeofence.setRadius(sharedPref.getFloat(KEY_GEOFENCE_RADIUS, 0.01f));
             markerForGeofence(latLng);
             drawGeofence();
+            startGeofence();
         }
     }
 
     // Clear Geofence
     private void clearGeofence() {
         Log.d(TAG, "clearGeofence()");
+
         LocationServices.GeofencingApi.removeGeofences(
                 googleApiClient,
                 createGeofencePendingIntent()
@@ -460,6 +581,29 @@ public class MainActivity extends AppCompatActivity implements
             geoFenceMarker.remove();
         if (geoFenceLimits != null)
             geoFenceLimits.remove();
+        if (customGeofence != null)
+            customGeofence = null;
+        removeGeofence();
+        isConnectWiFi = false;
+        isInsideArea = false;
+        checkStatus();
     }
 
+    private NetworkInfo getNetworkInfo(Context context) {
+        ConnectivityManager connManager = (ConnectivityManager)
+                context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        return connManager.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
+    }
+
+    @Override
+    public void onDialogPositiveClick(DialogFragment dialog, CustomGeofence customGeofence) {
+        this.customGeofence = customGeofence;
+        markerForGeofence(new LatLng(customGeofence.getLatitude(), customGeofence.getLongitude()));
+        startGeofence();
+        checkNetwork();
+    }
+
+    @Override
+    public void onDialogNegativeClick(DialogFragment dialog) {
+    }
 }

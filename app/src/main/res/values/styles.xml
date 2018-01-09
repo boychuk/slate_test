@@ -8,4 +8,34 @@
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
+    <style name="AppTheme.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <style name="AppTheme.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
+
+    <style name="AppTheme.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />
+
+    <style name="EditText" parent="AppTheme">
+        <item name="android:textColor">@color/TextColor.Black</item>
+        <item name="android:textColorHint">@color/TextColor.Gray</item>
+        <item name="android:layout_marginRight">@dimen/Margin.Standard</item>
+        <item name="android:layout_marginLeft">@dimen/Margin.Standard</item>
+        <item name="android:layout_marginTop">@dimen/Margin.Half</item>
+        <item name="android:layout_marginBottom">@dimen/Margin.Half</item>
+        <item name="android:textSize">@dimen/Text.Standard</item>
+    </style>
+
+    <style name="TextView" parent="AppTheme">
+        <item name="android:textColor">@color/TextColor.DarkGray</item>
+        <item name="android:textSize">@dimen/Text.Standard</item>
+    </style>
+
+    <style name="TextView.Header" parent="TextView">
+        <item name="android:textColor">@color/colorPrimary</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">@dimen/Text.VeryLarge</item>
+    </style>
+
 </resources>
